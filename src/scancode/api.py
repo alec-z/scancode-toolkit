@@ -6,6 +6,7 @@
 # See https://github.com/nexB/scancode-toolkit for support or download.
 # See https://aboutcode.org for more information about nexB OSS projects.
 #
+import functools
 from itertools import islice
 from os.path import getsize
 import logging
@@ -16,6 +17,9 @@ from commoncode.filetype import get_last_modified_date
 from commoncode.hash import multi_checksums
 from scancode import ScancodeError
 from typecode.contenttype import get_type
+from elasticsearch import Elasticsearch
+
+
 
 TRACE = False
 
@@ -24,6 +28,44 @@ logger = logging.getLogger(__name__)
 if TRACE:
     logging.basicConfig(stream=sys.stdout)
     logger.setLevel(logging.DEBUG)
+
+
+elasticSearch = Elasticsearch()
+
+def fcached(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kw):
+        location = args[0]
+        md5 = kw['md5']
+        if (md5 == None):
+            return func(*args, **kw)
+        md5func = md5 + func.__name__
+        equery = {
+            "query": {
+                "constant_score": {
+                    "filter": {
+                        "term": {
+                            "md5func": md5func
+                        }
+                    }
+                }
+            }
+        }
+
+        res = elasticSearch.search(index="file_location_scan_result", body=equery)
+        if res["hits"]["total"]["value"] == 1:
+            return res["hits"]["hits"][0]["_source"]["result"]
+        else:
+            result = func(*args, **kw)
+            doc = {"md5func": md5func}
+            doc["result"] = result
+            elasticSearch.index(index="file_location_scan_result", body=doc)
+            return result
+    return wrapper
+
+
+
+
 
 """
 Main scanning functions.
@@ -34,7 +76,7 @@ mappings as results.
 Note: this API is unstable and still evolving.
 """
 
-
+@fcached
 def get_copyrights(location, deadline=sys.maxsize, **kwargs):
     """
     Return a mapping with a single 'copyrights' key with a value that is a list
@@ -81,7 +123,7 @@ def get_copyrights(location, deadline=sys.maxsize, **kwargs):
 
     return results
 
-
+@fcached
 def get_emails(location, threshold=50, test_slow_mode=False, test_error_mode=False, **kwargs):
     """
     Return a mapping with a single 'emails' key with a value that is a list of
@@ -113,7 +155,7 @@ def get_emails(location, threshold=50, test_slow_mode=False, test_error_mode=Fal
         result['end_line'] = line_num
     return dict(emails=results)
 
-
+@fcached
 def get_urls(location, threshold=50, **kwargs):
     """
     Return a mapping with a single 'urls' key with a value that is a list of
@@ -140,7 +182,7 @@ SPDX_LICENSE_URL = 'https://spdx.org/licenses/{}'
 DEJACODE_LICENSE_URL = 'https://enterprise.dejacode.com/urn/urn:dje:license:{}'
 SCANCODE_LICENSEDB_URL = 'https://scancode-licensedb.aboutcode.org/{}'
 
-
+@fcached
 def get_licenses(location, min_score=0,
                  include_text=False, license_text_diagnostics=False,
                  license_url_template=SCANCODE_LICENSEDB_URL,
@@ -286,7 +328,7 @@ def _licenses_data_from_match(
 
 SCANCODE_DEBUG_PACKAGE_API = os.environ.get('SCANCODE_DEBUG_PACKAGE_API', False)
 
-
+@fcached
 def get_package_info(location, **kwargs):
     """
     Return a mapping of package manifest information detected in the
@@ -312,7 +354,7 @@ def get_package_info(location, **kwargs):
 
     return dict(packages=[])
 
-
+@fcached
 def get_file_info(location, **kwargs):
     """
     Return a mapping of file information collected for the file at `location`.
@@ -339,3 +381,4 @@ def get_file_info(location, **kwargs):
     result['is_source'] = bool(collector.is_source)
     result['is_script'] = bool(collector.is_script)
     return result
+    

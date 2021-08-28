@@ -42,6 +42,8 @@ from commoncode.timeutils import time2tstamp
 from commoncode.resource import Codebase
 from commoncode.resource import VirtualCodebase
 from commoncode.system import on_windows
+from commoncode.hash import multi_checksums
+
 
 # these are important to register plugin managers
 from plugincode import PluginManager
@@ -1335,6 +1337,7 @@ def scan_resource(
     """
     scan_time = time()
     location, rid = location_rid
+    
     results = {}
     scan_errors = []
     timings = {} if with_timing else None
@@ -1359,8 +1362,8 @@ def scan_resource(
                 deadline = time() + int(timeout / 2.5)
             else:
                 deadline = sys.maxsize
-
-            runner = partial(scanner.function, location, deadline=deadline)
+            (md5,) = multi_checksums(location, ('md5',)).values()
+            runner = partial(scanner.function, location, deadline=deadline, md5=md5)
             error, values_mapping = interruptor(runner, timeout=timeout)
             if error:
                 msg = 'ERROR: for scanner: ' + scanner.name + ':\n' + error
